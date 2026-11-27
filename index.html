@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#16171a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Корректор</title>
+<style>
+:root{--bg:#f6f5f1;--fg:#1d1d1f;--mu:#6b6b72;--card:#fff;--bd:#dedcd4;--ac:#3b5bdb;--typo:#e03131;--spell:#f08c00;--punct:#1c7ed6;--gram:#9c36b5;--style:#868e96}
+@media(prefers-color-scheme:dark){:root{--bg:#16171a;--fg:#ececec;--mu:#9a9aa2;--card:#202226;--bd:#33363c;--ac:#748ffc}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.55 Georgia,"Times New Roman",serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+main{max-width:640px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:4px 0 12px}
+button,input,textarea,summary{font:15px system-ui,sans-serif}
+textarea,input{width:100%;background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:10px;padding:12px}
+#inp{min-height:46vh;font:17px/1.55 Georgia,serif;resize:vertical}
+button{background:var(--ac);color:#fff;border:0;border-radius:10px;padding:12px 18px;cursor:pointer}
+button.g{background:transparent;color:var(--fg);border:1px solid var(--bd)}
+button:disabled{opacity:.35;cursor:default}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0}
+.leg{display:flex;gap:6px 12px;flex-wrap:wrap;font:13px system-ui,sans-serif;color:var(--mu)}
+#doc{white-space:pre-wrap;background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px;min-height:40vh}
+mark.m{background:color-mix(in srgb,var(--c) 22%,transparent);color:inherit;border-bottom:2px solid var(--c);border-radius:3px;cursor:pointer;padding:0 1px}
+details{font:14px system-ui,sans-serif;color:var(--mu);margin-bottom:10px}
+#msg{font:14px system-ui,sans-serif;color:var(--typo);min-height:20px}
+#pop{position:fixed;inset:0;background:#0007;display:flex;align-items:flex-end;justify-content:center}
+#pop[hidden]{display:none}
+.sheet{background:var(--bg);width:100%;max-width:640px;border-radius:16px 16px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom))}
+.tabs{display:flex;gap:6px;margin:10px 0}
+.tabs button{flex:1;background:transparent;color:var(--fg);border:1px solid var(--bd)}
+.tabs button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+#ed{min-height:90px;font:17px/1.5 Georgia,serif}
+#df{margin:8px 0;font-size:16px}
+#df b{background:color-mix(in srgb,var(--c) 30%,transparent);border-radius:2px;font-weight:inherit}
+#pnote{color:var(--mu);font:14px system-ui,sans-serif;margin:4px 0}
+</style></head><body><main>
+<h1>Корректор</h1>
+<details id="set"><summary>Ключ Mistral</summary>
+<input id="key" type="password" placeholder="Вставь API-ключ, он хранится только в этом браузере" autocomplete="off"></details>
+<div class="leg"><span>🔴 опечатка</span><span>🟠 орфография</span><span>🔵 пунктуация</span><span>🟣 грамматика</span><span>⚪ стиль</span></div>
+
+<section id="edit">
+<div class="row"><textarea id="inp" placeholder="Вставь или напиши текст"></textarea></div>
+<div class="row"><button id="go" disabled>Проверить</button><span id="msg"></span></div>
+</section>
+
+<section id="review" hidden>
+<div class="row"><b id="cnt"></b></div>
+<div id="doc"></div>
+<div class="row">
+<button id="all">Применить все исправления ошибок</button>
+<button class="g" id="cp">Копировать</button>
+<button class="g" id="back">Править текст</button>
+</div>
+</section>
+</main>
+
+<div id="pop" hidden><div class="sheet">
+<div class="row" style="justify-content:space-between;margin:0"><b id="pt"></b><button class="g" id="x">Закрыть</button></div>
+<div class="tabs"><button id="to">Оригинал</button><button id="tf" class="on">Исправлено</button></div>
+<textarea id="ed"></textarea>
+<div id="df"></div>
+<div id="pnote"></div>
+<div class="row" style="margin-bottom:0"><button id="ap">Применить</button></div>
+</div></div>
+
+<script>
+const CATS={typo:'🔴 Опечатка',spell:'🟠 Орфография',punct:'🔵 Пунктуация',gram:'🟣 Грамматика',style:'⚪ Стиль'};
+const DEBOUNCE=800;
+const PROMPT=`Ты корректор русского текста. Верни ТОЛЬКО JSON: {"issues":[{"original":"...","fixed":"...","category":"typo|spell|punct|gram|style","note":"..."}]}.
+Категории: typo — опечатка, промах по соседней клавише или автозамена Т9 (круэок вместо кружок); spell — орфография; punct — пунктуация; gram — грамматика, падежи, согласование; style — неудачная конструкция, порядок слов, тяжёлая фраза.
+Правила: original — дословный короткий фрагмент из текста (слово или несколько слов; для пунктуации слово рядом со знаком). fixed — тот же фрагмент исправленным. Идти строго в порядке появления в тексте. Не трогай мат, сленг, авторский стиль и намеренные приёмы. Не переписывай текст целиком. Для style fixed — осторожное предложение, а note мягкий, без слов «плохо» и «неправильно» (например «здесь можно споткнуться при чтении»). note до 12 слов. Если проблем нет, верни {"issues":[]}.`;
+const $=s=>document.querySelector(s);
+const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let segs=[],cur=0,side='f',tm,busy=false;
+try{$('#key').value=localStorage.getItem('mk')||''}catch(e){}
+$('#key').oninput=()=>{try{localStorage.setItem('mk',$('#key').value.trim())}catch(e){}};
+const upd=()=>{$('#go').disabled=busy||!$('#inp').value.trim()};
+$('#inp').oninput=upd;
+
+$('#go').onclick=async()=>{
+  const text=$('#inp').value,key=$('#key').value.trim();
+  if(!text.trim())return;
+  if(!key){$('#set').open=true;$('#msg').textContent='Сначала вставь ключ Mistral';return}
+  busy=true;upd();$('#msg').textContent='Проверяю…';
+  try{
+    const r=await fetch('https://api.mistral.ai/v1/chat/completions',{method:'POST',
+      headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},
+      body:JSON.stringify({model:'mistral-small-latest',temperature:0,response_format:{type:'json_object'},
+        messages:[{role:'system',content:PROMPT},{role:'user',content:text}]})});
+    if(!r.ok)throw new Error('Ошибка '+r.status+(r.status==401?': проверь ключ':''));
+    const j=JSON.parse((await r.json()).choices[0].message.content);
+    build(text,j.issues||[]);$('#msg').textContent='';
+  }catch(e){$('#msg').textContent=e.message||'Не удалось проверить'}
+  busy=false;upd();
+};
+
+function build(text,list){
+  segs=[];let p=0;
+  for(const it of list){
+    if(!it.original||it.original===it.fixed)continue;
+    const i=text.indexOf(it.original,p);if(i<0)continue;
+    if(i>p)segs.push({s:text.slice(p,i)});
+    segs.push({o:it.original,ov:it.original,fv:it.fixed,c:CATS[it.category]?it.category:'spell',n:it.note||''});
+    p=i+it.original.length;
+  }
+  segs.push({s:text.slice(p)});
+  $('#edit').hidden=true;$('#review').hidden=false;render();
+}
+function render(){
+  $('#doc').innerHTML=segs.map((g,i)=>g.c?`<mark class="m" data-i="${i}" style="--c:var(--${g.c})">${esc(g.o)}</mark>`:esc(g.s)).join('');
+  const n=segs.filter(g=>g.c).length;
+  $('#cnt').textContent=n?`Найдено: ${n}`:'Всё чисто';
+  $('#all').disabled=!segs.some(g=>g.c&&g.c!=='style');
+}
+const full=()=>segs.map(g=>g.c?g.o:g.s).join('');
+$('#doc').onclick=e=>{const m=e.target.closest('mark');if(m){cur=+m.dataset.i;side='f';pop()}};
+$('#all').onclick=()=>{segs=segs.map(g=>g.c&&g.c!=='style'?{s:g.fv}:g);render()};
+$('#cp').onclick=()=>navigator.clipboard.writeText(full());
+$('#back').onclick=()=>{$('#inp').value=full();$('#review').hidden=true;$('#edit').hidden=false;upd()};
+
+function pop(){
+  const g=segs[cur];
+  $('#pt').textContent=CATS[g.c];$('#pnote').textContent=g.n;
+  $('#to').classList.toggle('on',side==='o');$('#tf').classList.toggle('on',side==='f');
+  $('#ed').value=side==='f'?g.fv:g.ov;
+  $('#df').style.setProperty('--c',`var(--${g.c})`);
+  diff();$('#pop').hidden=false;
+}
+$('#to').onclick=()=>{side='o';pop()};
+$('#tf').onclick=()=>{side='f';pop()};
+$('#ed').oninput=()=>{segs[cur][side==='f'?'fv':'ov']=$('#ed').value;clearTimeout(tm);tm=setTimeout(diff,DEBOUNCE)};
+$('#x').onclick=()=>{$('#pop').hidden=true};
+$('#pop').onclick=e=>{if(e.target.id==='pop')$('#pop').hidden=true};
+$('#ap').onclick=()=>{const g=segs[cur];segs[cur]={s:side==='f'?g.fv:g.ov};$('#pop').hidden=true;render()};
+
+const tok=s=>s.length<=60?[...s]:s.split(/(\s+)/).filter(Boolean);
+function diff(){
+  const g=segs[cur],a=tok(g.ov),b=tok(g.fv),m=a.length,n=b.length;
+  const L=Array.from({length:m+1},()=>new Uint16Array(n+1));
+  for(let i=m-1;i>=0;i--)for(let j=n-1;j>=0;j--)L[i][j]=a[i]===b[j]?L[i+1][j+1]+1:Math.max(L[i+1][j],L[i][j+1]);
+  let i=0,j=0,ha='',hb='';const w=x=>`<b>${esc(x)}</b>`;
+  while(i<m&&j<n){
+    if(a[i]===b[j]){ha+=esc(a[i]);hb+=esc(b[j]);i++;j++}
+    else if(L[i+1][j]>=L[i][j+1])ha+=w(a[i++]);else hb+=w(b[j++]);
+  }
+  while(i<m)ha+=w(a[i++]);while(j<n)hb+=w(b[j++]);
+  $('#df').innerHTML=side==='f'?hb:ha;
+}
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script></body></html>
