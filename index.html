@@ -38,9 +38,9 @@ details{font:14px system-ui,sans-serif;color:var(--mu);margin-bottom:10px}
 #doc{outline:none;overflow-wrap:anywhere;margin-bottom:6px;min-height:46vh}#doc.e:before{content:attr(data-ph);color:var(--mu)}#fab{position:fixed;z-index:5;box-shadow:0 4px 14px #0005}#fab[hidden]{display:none}
 </style></head><body><main>
 <h1>Корректор</h1>
-<details id="set"><summary>Ключ Groq</summary>
+<details id="set"><summary>Ключ Gemini</summary>
 <input id="key" type="password" placeholder="Вставь API-ключ, он хранится только в этом браузере" autocomplete="off">
-<input id="mdl" placeholder="Модель (пусто = openai/gpt-oss-120b)" autocomplete="off" style="margin-top:8px"></details>
+<input id="mdl" placeholder="Модель (пусто = gemini-2.5-flash)" autocomplete="off" style="margin-top:8px"></details>
 <div class="leg"><span>🔴 опечатка</span><span>🟠 орфография</span><span>🔵 пунктуация</span><span>🟣 грамматика</span><span>⚪ стиль</span></div>
 
 <div id="doc" class="e" data-ph="Вставь или напиши текст" spellcheck="false"></div>
@@ -70,9 +70,9 @@ const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const doc=$('#doc'),fab=$('#fab');
 doc.contentEditable='plaintext-only';if(doc.contentEditable!=='plaintext-only')doc.contentEditable='true';
 let issues={},nid=0,cur=null,side='f',tm,ft,busy=false,saved=null;
-try{$('#key').value=localStorage.getItem('gk')||'';$('#mdl').value=localStorage.getItem('gm')||''}catch(e){}
-$('#key').oninput=()=>{try{localStorage.setItem('gk',$('#key').value.trim())}catch(e){}};
-$('#mdl').oninput=()=>{try{localStorage.setItem('gm',$('#mdl').value.trim())}catch(e){}};
+try{$('#key').value=localStorage.getItem('ge')||'';$('#mdl').value=localStorage.getItem('gn')||''}catch(e){}
+$('#key').oninput=()=>{try{localStorage.setItem('ge',$('#key').value.trim())}catch(e){}};
+$('#mdl').oninput=()=>{try{localStorage.setItem('gn',$('#mdl').value.trim())}catch(e){}};
 const text=()=>doc.textContent,msg=t=>{$('#msg').textContent=t};
 function upd(){
   const e=!text().trim();doc.classList.toggle('e',e);$('#go').disabled=busy||e;
@@ -82,35 +82,45 @@ function upd(){
 }
 doc.oninput=upd;
 
-function call(t,json,key,M){
-  return fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',
-    headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},
-    body:JSON.stringify({model:M,temperature:0,max_completion_tokens:2500,...(M.startsWith('openai/gpt-oss')?{reasoning_effort:'medium'}:{}),...(json?{response_format:{type:'json_object'}}:{}),
-      messages:[{role:'system',content:PROMPT},{role:'user',content:t}]})});
+const SCHEMA={type:'OBJECT',properties:{issues:{type:'ARRAY',items:{type:'OBJECT',properties:{original:{type:'STRING'},fixed:{type:'STRING'},category:{type:'STRING',enum:['typo','spell','punct','gram','style']},note:{type:'STRING'}},required:['original','fixed','category','note']}}},required:['issues']};
+const SAFE=['HARASSMENT','HATE_SPEECH','SEXUALLY_EXPLICIT','DANGEROUS_CONTENT'].map(c=>({category:'HARM_CATEGORY_'+c,threshold:'BLOCK_NONE'}));
+const API='https://generativelanguage.googleapis.com/v1beta/models';
+const cache=new Map();
+function call(u,key,M){
+  return fetch(API+'/'+encodeURIComponent(M)+':generateContent?key='+encodeURIComponent(key),{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({systemInstruction:{parts:[{text:PROMPT}]},contents:[{role:'user',parts:[{text:u}]}],safetySettings:SAFE,
+      generationConfig:{temperature:0,maxOutputTokens:8192,responseMimeType:'application/json',responseSchema:SCHEMA}})});
 }
 async function ask(t,b,a){
+  const key=$('#key').value.trim(),M=$('#mdl').value.trim()||'gemini-2.5-flash';
+  if(!key){$('#set').open=true;throw new Error('Сначала вставь ключ Gemini')}
   const u=(b||a)?"КОНТЕКСТ ДО (не проверять):\n"+(b||"")+"\n\nПРОВЕРЬ ЭТОТ ТЕКСТ:\n"+t+"\n\nКОНТЕКСТ ПОСЛЕ (не проверять):\n"+(a||""):t;
-  const key=$('#key').value.trim(),M=$('#mdl').value.trim()||'openai/gpt-oss-120b';
-  if(!key){$('#set').open=true;throw new Error('Сначала вставь ключ Groq')}
   let r;
   for(let k=0;;k++){
-    r=await call(u,true,key,M);
-    if(r.status===400)r=await call(u,false,key,M);
-    if(r.status!==429||k>=4)break;
-    let m='';try{m=(await r.clone().json()).error.message}catch(e){}
-    const w=m.match(/in (?:(\d+)m)?([\d.]+)s/);
-    const sec=Math.min(60,w?(+(w[1]||0))*60+parseFloat(w[2])+1:10);
-    for(let n=Math.ceil(sec);n>0;n--){msg('Лимит Groq, жду '+n+' с…');await new Promise(x=>setTimeout(x,1000))}
+    r=await call(u,key,M);
+    if((r.status!==429&&r.status!==503)||k>=4)break;
+    let e='';try{e=(await r.clone().json()).error.message}catch(x){}
+    const w=e.match(/retry in ([\d.]+)s/i),sec=Math.min(60,w?parseFloat(w[1])+1:12);
+    for(let n=Math.ceil(sec);n>0;n--){msg('Лимит или нагрузка, жду '+n+' с…');await new Promise(x=>setTimeout(x,1000))}
   }
-  if(!r.ok){let m='';try{m=(await r.json()).error.message}catch(e){}throw new Error('Ошибка '+r.status+(r.status==401?': проверь ключ':r.status==429?': лимит, подожди минуту':'')+(m?' — '+m.slice(0,140):''))}
-  const raw=(await r.json()).choices[0].message.content,m=raw.match(/\{[\s\S]*\}/);
-  try{return JSON.parse(m?m[0]:raw).issues||[]}catch(e){throw new Error('Модель ответила не в том формате')}
+  if(!r.ok){
+    let e='';try{e=(await r.json()).error.message}catch(x){}
+    if(r.status===404){try{const l=await(await fetch(API+'?key='+encodeURIComponent(key))).json();
+      e+=' Доступны: '+l.models.filter(x=>(x.supportedGenerationMethods||[]).includes('generateContent')&&/flash/.test(x.name)).slice(0,6).map(x=>x.name.replace('models/','')).join(', ')}catch(x){}}
+    throw new Error('Ошибка '+r.status+(r.status==429?': лимит, подожди':'')+(e?' — '+e.slice(0,220):''));
+  }
+  const j=await r.json(),c=j.candidates&&j.candidates[0],ps=(c&&c.content&&c.content.parts)||[];
+  const raw=ps.filter(p=>!p.thought).map(p=>p.text||'').join('');
+  if(!raw)throw new Error('Пустой ответ'+(c&&c.finishReason?' ('+c.finishReason+')':''));
+  const m=raw.match(/\{[\s\S]*\}/);
+  try{return JSON.parse(m?m[0]:raw).issues||[]}catch(x){throw new Error('Модель ответила не в том формате')}
 }
 function chunks(t){
   const p=t.match(/[^\n.!?…]*[\n.!?…]+\s*|[^\n.!?…]+$/g)||[t];
   if(p.join('')!==t)return [t];
   const o=[];let c='';
-  for(const x of p){if(c&&c.length+x.length>600){o.push(c);c=''}c+=x}
+  for(const x of p){if(c&&c.length+x.length>1500){o.push(c);c=''}c+=x}
   if(c)o.push(c);return o;
 }
 function frag(t,list){
@@ -136,11 +146,77 @@ $('#go').onclick=()=>run(async()=>{
   const cs=chunks(text()),f=document.createDocumentFragment();let bad=0;
   for(let i=0;i<cs.length;i++){
     msg('Проверяю '+(i+1)+' из '+cs.length+'…');
-    try{f.append(frag(cs[i],await ask(cs[i],(cs[i-1]||"").slice(-250),(cs[i+1]||"").slice(0,250))))}
-    catch(e){if(/Ошибка 40[1]|Ошибка 429|ключ Groq/.test(e.message))throw e;bad++;f.append(cs[i])}
+    try{let l=cache.get(cs[i]);if(!l){l=await ask(cs[i],(cs[i-1]||"").slice(-200),(cs[i+1]||"").slice(0,200));cache.set(cs[i],l)}f.append(frag(cs[i],l))}
+    catch(e){if(/Ошибка 4|ключ Gemini/.test(e.message))throw e;bad++;f.append(cs[i])}
   }
   doc.replaceChildren(f);
   return bad?'Не удалось проверить кусков: '+bad+'. Нажми «Проверить» ещё раз.':'';
+});
+$('#all').onclick=()=>{
+  doc.querySelectorAll('mark.m').forEach(m=>{const g=issues[m.dataset.i];if(g&&g.c!=='style')m.replaceWith(document.createTextNode(g.fv))});
+  doc.normalize();upd();
+};
+$('#cp').onclick=()=>navigator.clipboard.writeText(text());
+
+/* кнопка у выделения, появляется через 0.4 с */
+const mkOf=n=>{const e=n.nodeType===1?n:n.parentElement;return e&&e.closest('mark.m')};
+document.addEventListener('selectionchange',()=>{
+  clearTimeout(ft);fab.hidden=true;
+  const s=getSelection();if(!s.rangeCount||!s.anchorNode||!doc.contains(s.anchorNode)||!$('#pop').hidden)return;
+  const r=s.getRangeAt(0),a=mkOf(r.startContainer),b=mkOf(r.endContainer),mk=a&&a===b?a:null;
+  if(r.collapsed&&!mk)return;
+  ft=setTimeout(()=>{saved={r:r.cloneRange(),mk};showFab(r,mk)},400);
+});
+function showFab(r,mk){
+  fab.textContent=mk?'Править':'Проверить отрезок';fab.hidden=false;
+  const bb=(r.collapsed&&mk?mk:r).getBoundingClientRect(),vv=window.visualViewport;
+  let top=bb.bottom+36;if(top+50>(vv?vv.height:innerHeight))top=Math.max(8,bb.top-96);
+  fab.style.top=top+'px';
+  fab.style.left=Math.min(Math.max(8,bb.left),innerWidth-fab.offsetWidth-8)+'px';
+}
+fab.onclick=()=>{
+  fab.hidden=true;if(!saved)return;const{r,mk}=saved;
+  if(mk){openPop(mk);return}
+  const t=r.toString();if(!t.trim())return;
+  run(async()=>{const l=await ask(t);r.deleteContents();r.insertNode(frag(t,l));doc.normalize()});
+};
+
+/* окошко исправления */
+const G=()=>issues[cur.dataset.i];
+function openPop(mk){cur=mk;G().ov=mk.textContent;side='f';draw();$('#pop').hidden=false}
+function draw(){
+  const g=G();
+  $('#pt').textContent=CATS[g.c];$('#pnote').textContent=g.n;
+  $('#to').classList.toggle('on',side==='o');$('#tf').classList.toggle('on',side==='f');
+  $('#ed').value=side==='f'?g.fv:g.ov;
+  $('#df').style.setProperty('--c','var(--'+g.c+')');diff();
+}
+$('#to').onclick=()=>{side='o';draw()};
+$('#tf').onclick=()=>{side='f';draw()};
+$('#ed').oninput=()=>{G()[side==='f'?'fv':'ov']=$('#ed').value;clearTimeout(tm);tm=setTimeout(diff,DEBOUNCE)};
+$('#x').onclick=()=>{$('#pop').hidden=true};
+$('#pop').onclick=e=>{if(e.target.id==='pop')$('#pop').hidden=true};
+$('#ap').onclick=()=>{
+  const g=G();cur.replaceWith(document.createTextNode(side==='f'?g.fv:g.ov));
+  doc.normalize();$('#pop').hidden=true;upd();
+};
+const tok=s=>s.length<=60?[...s]:s.split(/(\s+)/).filter(Boolean);
+function diff(){
+  const g=G(),a=tok(g.ov),b=tok(g.fv),m=a.length,n=b.length;
+  const L=Array.from({length:m+1},()=>new Uint16Array(n+1));
+  for(let i=m-1;i>=0;i--)for(let j=n-1;j>=0;j--)L[i][j]=a[i]===b[j]?L[i+1][j+1]+1:Math.max(L[i+1][j],L[i][j+1]);
+  let i=0,j=0,ha='',hb='';const w=x=>'<b>'+esc(x)+'</b>';
+  while(i<m&&j<n){
+    if(a[i]===b[j]){ha+=esc(a[i]);hb+=esc(b[j]);i++;j++}
+    else if(L[i+1][j]>=L[i][j+1])ha+=w(a[i++]);else hb+=w(b[j++]);
+  }
+  while(i<m)ha+=w(a[i++]);while(j<n)hb+=w(b[j++]);
+  $('#df').innerHTML=side==='f'?hb:ha;
+}
+upd();
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script></body></html>
+ Нажми «Проверить» ещё раз.':'';
 });
 $('#all').onclick=()=>{
   doc.querySelectorAll('mark.m').forEach(m=>{const g=issues[m.dataset.i];if(g&&g.c!=='style')m.replaceWith(document.createTextNode(g.fv))});
