@@ -85,14 +85,22 @@ doc.oninput=upd;
 function call(t,json,key,M){
   return fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',
     headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},
-    body:JSON.stringify({model:M,temperature:0,max_completion_tokens:4096,...(M.startsWith('openai/gpt-oss')?{reasoning_effort:'medium'}:{}),...(json?{response_format:{type:'json_object'}}:{}),
+    body:JSON.stringify({model:M,temperature:0,max_completion_tokens:2500,...(M.startsWith('openai/gpt-oss')?{reasoning_effort:'medium'}:{}),...(json?{response_format:{type:'json_object'}}:{}),
       messages:[{role:'system',content:PROMPT},{role:'user',content:t}]})});
 }
 async function ask(t){
   const key=$('#key').value.trim(),M=$('#mdl').value.trim()||'openai/gpt-oss-120b';
   if(!key){$('#set').open=true;throw new Error('Сначала вставь ключ Groq')}
-  let r=await call(t,true,key,M);
-  if(r.status===400)r=await call(t,false,key,M);
+  let r;
+  for(let k=0;;k++){
+    r=await call(t,true,key,M);
+    if(r.status===400)r=await call(t,false,key,M);
+    if(r.status!==429||k>=4)break;
+    let m='';try{m=(await r.clone().json()).error.message}catch(e){}
+    const w=m.match(/in (?:(\d+)m)?([\d.]+)s/);
+    const sec=Math.min(60,w?(+(w[1]||0))*60+parseFloat(w[2])+1:10);
+    for(let n=Math.ceil(sec);n>0;n--){msg('Лимит Groq, жду '+n+' с…');await new Promise(x=>setTimeout(x,1000))}
+  }
   if(!r.ok){let m='';try{m=(await r.json()).error.message}catch(e){}throw new Error('Ошибка '+r.status+(r.status==401?': проверь ключ':r.status==429?': лимит, подожди минуту':'')+(m?' — '+m.slice(0,140):''))}
   const raw=(await r.json()).choices[0].message.content,m=raw.match(/\{[\s\S]*\}/);
   try{return JSON.parse(m?m[0]:raw).issues||[]}catch(e){throw new Error('Модель ответила не в том формате')}
@@ -149,6 +157,54 @@ document.addEventListener('selectionchange',()=>{
   ft=setTimeout(()=>{saved={r:r.cloneRange(),mk};showFab(r,mk)},400);
 });
 function showFab(r,mk){
+  fab.textContent=mk?'Править':'Проверить отрезок';fab.hidden=false;
+  const bb=(r.collapsed&&mk?mk:r).getBoundingClientRect(),vv=window.visualViewport;
+  let top=bb.bottom+36;if(top+50>(vv?vv.height:innerHeight))top=Math.max(8,bb.top-96);
+  fab.style.top=top+'px';
+  fab.style.left=Math.min(Math.max(8,bb.left),innerWidth-fab.offsetWidth-8)+'px';
+}
+fab.onclick=()=>{
+  fab.hidden=true;if(!saved)return;const{r,mk}=saved;
+  if(mk){openPop(mk);return}
+  const t=r.toString();if(!t.trim())return;
+  run(async()=>{const l=await ask(t);r.deleteContents();r.insertNode(frag(t,l));doc.normalize()});
+};
+
+/* окошко исправления */
+const G=()=>issues[cur.dataset.i];
+function openPop(mk){cur=mk;G().ov=mk.textContent;side='f';draw();$('#pop').hidden=false}
+function draw(){
+  const g=G();
+  $('#pt').textContent=CATS[g.c];$('#pnote').textContent=g.n;
+  $('#to').classList.toggle('on',side==='o');$('#tf').classList.toggle('on',side==='f');
+  $('#ed').value=side==='f'?g.fv:g.ov;
+  $('#df').style.setProperty('--c','var(--'+g.c+')');diff();
+}
+$('#to').onclick=()=>{side='o';draw()};
+$('#tf').onclick=()=>{side='f';draw()};
+$('#ed').oninput=()=>{G()[side==='f'?'fv':'ov']=$('#ed').value;clearTimeout(tm);tm=setTimeout(diff,DEBOUNCE)};
+$('#x').onclick=()=>{$('#pop').hidden=true};
+$('#pop').onclick=e=>{if(e.target.id==='pop')$('#pop').hidden=true};
+$('#ap').onclick=()=>{
+  const g=G();cur.replaceWith(document.createTextNode(side==='f'?g.fv:g.ov));
+  doc.normalize();$('#pop').hidden=true;upd();
+};
+const tok=s=>s.length<=60?[...s]:s.split(/(\s+)/).filter(Boolean);
+function diff(){
+  const g=G(),a=tok(g.ov),b=tok(g.fv),m=a.length,n=b.length;
+  const L=Array.from({length:m+1},()=>new Uint16Array(n+1));
+  for(let i=m-1;i>=0;i--)for(let j=n-1;j>=0;j--)L[i][j]=a[i]===b[j]?L[i+1][j+1]+1:Math.max(L[i+1][j],L[i][j+1]);
+  let i=0,j=0,ha='',hb='';const w=x=>'<b>'+esc(x)+'</b>';
+  while(i<m&&j<n){
+    if(a[i]===b[j]){ha+=esc(a[i]);hb+=esc(b[j]);i++;j++}
+    else if(L[i+1][j]>=L[i][j+1])ha+=w(a[i++]);else hb+=w(b[j++]);
+  }
+  while(i<m)ha+=w(a[i++]);while(j<n)hb+=w(b[j++]);
+  $('#df').innerHTML=side==='f'?hb:ha;
+}
+upd();
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script></body></html>
   fab.textContent=mk?'Править':'Проверить отрезок';fab.hidden=false;
   const bb=(r.collapsed&&mk?mk:r).getBoundingClientRect(),vv=window.visualViewport;
   let top=bb.bottom+36;if(top+50>(vv?vv.height:innerHeight))top=Math.max(8,bb.top-96);
