@@ -37,7 +37,7 @@ details{font:14px system-ui,sans-serif;color:var(--mu);margin-bottom:10px}
 #pnote{color:var(--mu);font:14px system-ui,sans-serif;margin:4px 0}
 </style></head><body><main>
 <h1>Корректор</h1>
-<details id="set"><summary>Ключ Mistral</summary>
+<details id="set"><summary>Ключ Groq</summary>
 <input id="key" type="password" placeholder="Вставь API-ключ, он хранится только в этом браузере" autocomplete="off"></details>
 <div class="leg"><span>🔴 опечатка</span><span>🟠 орфография</span><span>🔵 пунктуация</span><span>🟣 грамматика</span><span>⚪ стиль</span></div>
 
@@ -75,22 +75,22 @@ const PROMPT=`Ты корректор русского текста. Верни 
 const $=s=>document.querySelector(s);
 const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 let segs=[],cur=0,side='f',tm,busy=false;
-try{$('#key').value=localStorage.getItem('mk')||''}catch(e){}
-$('#key').oninput=()=>{try{localStorage.setItem('mk',$('#key').value.trim())}catch(e){}};
+try{$('#key').value=localStorage.getItem('gk')||''}catch(e){}
+$('#key').oninput=()=>{try{localStorage.setItem('gk',$('#key').value.trim())}catch(e){}};
 const upd=()=>{$('#go').disabled=busy||!$('#inp').value.trim()};
 $('#inp').oninput=upd;
 
 $('#go').onclick=async()=>{
   const text=$('#inp').value,key=$('#key').value.trim();
   if(!text.trim())return;
-  if(!key){$('#set').open=true;$('#msg').textContent='Сначала вставь ключ Mistral';return}
+  if(!key){$('#set').open=true;$('#msg').textContent='Сначала вставь ключ Groq';return}
   busy=true;upd();$('#msg').textContent='Проверяю…';
   try{
-    const r=await fetch('https://api.mistral.ai/v1/chat/completions',{method:'POST',
+    const r=await fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',
       headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},
-      body:JSON.stringify({model:'mistral-small-latest',temperature:0,response_format:{type:'json_object'},
+      body:JSON.stringify({model:'llama-3.3-70b-versatile',temperature:0,response_format:{type:'json_object'},
         messages:[{role:'system',content:PROMPT},{role:'user',content:text}]})});
-    if(!r.ok)throw new Error('Ошибка '+r.status+(r.status==401?': проверь ключ':''));
+    if(!r.ok)throw new Error('Ошибка '+r.status+(r.status==401?': проверь ключ':r.status==429?': лимит, подожди минуту':''));
     const j=JSON.parse((await r.json()).choices[0].message.content);
     build(text,j.issues||[]);$('#msg').textContent='';
   }catch(e){$('#msg').textContent=e.message||'Не удалось проверить'}
