@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#16171a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Корректор</title>
+<style>
+:root{--bg:#f6f5f1;--fg:#1d1d1f;--mu:#6b6b72;--card:#fff;--bd:#dedcd4;--ac:#3b5bdb;--typo:#e03131;--spell:#f08c00;--punct:#1c7ed6;--gram:#9c36b5;--style:#868e96}
+@media(prefers-color-scheme:dark){:root{--bg:#16171a;--fg:#ececec;--mu:#9a9aa2;--card:#202226;--bd:#33363c;--ac:#748ffc}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.55 Georgia,"Times New Roman",serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+main{max-width:640px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:4px 0 12px}
+button,input,textarea,summary{font:15px system-ui,sans-serif}
+textarea,input{width:100%;background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:10px;padding:12px}
+#inp{min-height:46vh;font:17px/1.55 Georgia,serif;resize:vertical}
+button{background:var(--ac);color:#fff;border:0;border-radius:10px;padding:12px 18px;cursor:pointer}
+button.g{background:transparent;color:var(--fg);border:1px solid var(--bd)}
+button:disabled{opacity:.35;cursor:default}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0}
+.leg{display:flex;gap:6px 12px;flex-wrap:wrap;font:13px system-ui,sans-serif;color:var(--mu)}
+#doc{white-space:pre-wrap;background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px;min-height:40vh}
+mark.m{background:color-mix(in srgb,var(--c) 22%,transparent);color:inherit;border-bottom:2px solid var(--c);border-radius:3px;cursor:pointer;padding:0 1px}
+details{font:14px system-ui,sans-serif;color:var(--mu);margin-bottom:10px}
+#msg{font:14px system-ui,sans-serif;color:var(--typo);min-height:20px}
+#pop{position:fixed;inset:0;background:#0007;display:flex;align-items:flex-end;justify-content:center}
+#pop[hidden]{display:none}
+.sheet{background:var(--bg);width:100%;max-width:640px;border-radius:16px 16px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom))}
+.tabs{display:flex;gap:6px;margin:10px 0}
+.tabs button{flex:1;background:transparent;color:var(--fg);border:1px solid var(--bd)}
+.tabs button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+#ed{min-height:90px;font:17px/1.5 Georgia,serif}
+#df{margin:8px 0;font-size:16px}
+#df b{background:color-mix(in srgb,var(--c) 30%,transparent);border-radius:2px;font-weight:inherit}
+#pnote{color:var(--mu);font:14px system-ui,sans-serif;margin:4px 0}
+#doc{outline:none;overflow-wrap:anywhere;margin-bottom:6px;min-height:46vh}#doc.e:before{content:attr(data-ph);color:var(--mu)}#fab{position:fixed;z-index:5;box-shadow:0 4px 14px #0005}#fab[hidden]{display:none}
+</style></head><body><main>
+<h1>Корректор</h1>
+<details id="set"><summary>Ключ Groq</summary>
+<input id="key" type="password" placeholder="Вставь API-ключ, он хранится только в этом браузере" autocomplete="off">
+<input id="mdl" placeholder="Модель (пусто = openai/gpt-oss-120b)" autocomplete="off" style="margin-top:8px"></details>
+<div class="leg"><span>🔴 опечатка</span><span>🟠 орфография</span><span>🔵 пунктуация</span><span>🟣 грамматика</span><span>⚪ стиль</span></div>
+
+<div id="doc" class="e" data-ph="Вставь или напиши текст" spellcheck="false"></div>
+<div class="row"><button id="go" disabled>Проверить</button><button class="g" id="all" disabled>Применить все исправления</button><button class="g" id="cp">Копировать</button></div>
+<div class="row"><b id="cnt"></b><span id="msg"></span></div>
+</main>
+<button id="fab" hidden></button>
+
+<div id="pop" hidden><div class="sheet">
+<div class="row" style="justify-content:space-between;margin:0"><b id="pt"></b><button class="g" id="x">Закрыть</button></div>
+<div class="tabs"><button id="to">Оригинал</button><button id="tf" class="on">Исправлено</button></div>
+<textarea id="ed"></textarea>
+<div id="df"></div>
+<div id="pnote"></div>
+<div class="row" style="margin-bottom:0"><button id="ap">Применить</button></div>
+</div></div>
+
+<script>
+const CATS={typo:'🔴 Опечатка',spell:'🟠 Орфография',punct:'🔵 Пунктуация',gram:'🟣 Грамматика',style:'⚪ Стиль'};
+const DEBOUNCE=800;
+const PROMPT=`Ты корректор русского текста. Верни ТОЛЬКО JSON: {"issues":[{"original":"...","fixed":"...","category":"typo|spell|punct|gram|style","note":"..."}]}.
+Категории: typo — опечатка, промах по соседней клавише или автозамена Т9 (круэок вместо кружок); spell — орфография; punct — пунктуация; gram — грамматика, падежи, согласование; style — неудачная конструкция, порядок слов, тяжёлая фраза.
+Пользователь может прислать контекст до и после: он нужен только чтобы понять смысл, а исправления бери только из блока «ПРОВЕРЬ ЭТОТ ТЕКСТ» (original дословно оттуда). Сначала пойми смысл предложения целиком, потом проверяй каждое слово в связке с соседними словами и с предыдущей фразой. Проверяй каждое слово в контексте фразы, а не по словарю: если слово существует, но по смыслу не подходит и похоже на опечатку или автозамену, это typo; слова, которых нет в языке, тоже ошибки. Пример: «Очин коряви текст» → original «Очин коряви», fixed «Очень корявый», category typo. Не пропускай такие случаи, даже если слово есть в словаре.
+Правила: original — дословный короткий фрагмент из текста (слово или несколько слов; для пунктуации слово рядом со знаком). fixed — тот же фрагмент исправленным. Идти строго в порядке появления в тексте. Не трогай мат, сленг, авторский стиль и намеренные приёмы. Не переписывай текст целиком. Для style fixed — осторожное предложение, а note мягкий, без слов «плохо» и «неправильно» (например «здесь можно споткнуться при чтении»). note до 12 слов. Внутри значений экранируй кавычки и не используй переносы строк. Если проблем нет, верни {"issues":[]}.`;
+const $=s=>document.querySelector(s);
+const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const doc=$('#doc'),fab=$('#fab');
+doc.contentEditable='plaintext-only';if(doc.contentEditable!=='plaintext-only')doc.contentEditable='true';
+let issues={},nid=0,cur=null,side='f',tm,ft,busy=false,saved=null;
+try{$('#key').value=localStorage.getItem('gk')||'';$('#mdl').value=localStorage.getItem('gm')||''}catch(e){}
+$('#key').oninput=()=>{try{localStorage.setItem('gk',$('#key').value.trim())}catch(e){}};
+$('#mdl').oninput=()=>{try{localStorage.setItem('gm',$('#mdl').value.trim())}catch(e){}};
+const text=()=>doc.textContent,msg=t=>{$('#msg').textContent=t};
+function upd(){
+  const e=!text().trim();doc.classList.toggle('e',e);$('#go').disabled=busy||e;
+  const m=[...doc.querySelectorAll('mark.m')];
+  $('#cnt').textContent=m.length?'Найдено: '+m.length:'';
+  $('#all').disabled=!m.some(x=>issues[x.dataset.i]&&issues[x.dataset.i].c!=='style');
+}
+doc.oninput=upd;
+
+function call(t,json,key,M){
+  return fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',
+    headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},
+    body:JSON.stringify({model:M,temperature:0,max_completion_tokens:2500,...(M.startsWith('openai/gpt-oss')?{reasoning_effort:'medium'}:{}),...(json?{response_format:{type:'json_object'}}:{}),
+      messages:[{role:'system',content:PROMPT},{role:'user',content:t}]})});
+}
+async function ask(t,b,a){
+  const u=(b||a)?"КОНТЕКСТ ДО (не проверять):\n"+(b||"")+"\n\nПРОВЕРЬ ЭТОТ ТЕКСТ:\n"+t+"\n\nКОНТЕКСТ ПОСЛЕ (не проверять):\n"+(a||""):t;
+  const key=$('#key').value.trim(),M=$('#mdl').value.trim()||'openai/gpt-oss-120b';
+  if(!key){$('#set').open=true;throw new Error('Сначала вставь ключ Groq')}
+  let r;
+  for(let k=0;;k++){
+    r=await call(u,true,key,M);
+    if(r.status===400)r=await call(u,false,key,M);
+    if(r.status!==429||k>=4)break;
+    let m='';try{m=(await r.clone().json()).error.message}catch(e){}
+    const w=m.match(/in (?:(\d+)m)?([\d.]+)s/);
+    const sec=Math.min(60,w?(+(w[1]||0))*60+parseFloat(w[2])+1:10);
+    for(let n=Math.ceil(sec);n>0;n--){msg('Лимит Groq, жду '+n+' с…');await new Promise(x=>setTimeout(x,1000))}
+  }
+  if(!r.ok){let m='';try{m=(await r.json()).error.message}catch(e){}throw new Error('Ошибка '+r.status+(r.status==401?': проверь ключ':r.status==429?': лимит, подожди минуту':'')+(m?' — '+m.slice(0,140):''))}
+  const raw=(await r.json()).choices[0].message.content,m=raw.match(/\{[\s\S]*\}/);
+  try{return JSON.parse(m?m[0]:raw).issues||[]}catch(e){throw new Error('Модель ответила не в том формате')}
+}
+function chunks(t){
+  const p=t.match(/[^\n.!?…]*[\n.!?…]+\s*|[^\n.!?…]+$/g)||[t];
+  if(p.join('')!==t)return [t];
+  const o=[];let c='';
+  for(const x of p){if(c&&c.length+x.length>600){o.push(c);c=''}c+=x}
+  if(c)o.push(c);return o;
+}
+function frag(t,list){
+  const f=document.createDocumentFragment();let p=0;
+  for(const it of list){
+    if(!it.original||it.original===it.fixed)continue;
+    const i=t.indexOf(it.original,p);if(i<0)continue;
+    if(i>p)f.append(t.slice(p,i));
+    const id=nid++,c=CATS[it.category]?it.category:'spell';
+    issues[id]={fv:it.fixed,c,n:it.note||'',ov:it.original};
+    const m=document.createElement('mark');m.className='m';m.dataset.i=id;
+    m.style.setProperty('--c','var(--'+c+')');m.textContent=it.original;f.append(m);
+    p=i+it.original.length;
+  }
+  f.append(t.slice(p));return f;
+}
+async function run(job){
+  busy=true;upd();msg('Проверяю…');
+  try{msg(await job()||'')}catch(e){msg(e.message||'Не удалось проверить')}
+  busy=false;upd();
+}
+$('#go').onclick=()=>run(async()=>{
+  const cs=chunks(text()),f=document.createDocumentFragment();let bad=0;
+  for(let i=0;i<cs.length;i++){
+    msg('Проверяю '+(i+1)+' из '+cs.length+'…');
+    try{f.append(frag(cs[i],await ask(cs[i],(cs[i-1]||"").slice(-250),(cs[i+1]||"").slice(0,250))))}
+    catch(e){if(/Ошибка 40[1]|Ошибка 429|ключ Groq/.test(e.message))throw e;bad++;f.append(cs[i])}
+  }
+  doc.replaceChildren(f);
+  return bad?'Не удалось проверить кусков: '+bad+'. Нажми «Проверить» ещё раз.':'';
+});
+$('#all').onclick=()=>{
+  doc.querySelectorAll('mark.m').forEach(m=>{const g=issues[m.dataset.i];if(g&&g.c!=='style')m.replaceWith(document.createTextNode(g.fv))});
+  doc.normalize();upd();
+};
+$('#cp').onclick=()=>navigator.clipboard.writeText(text());
+
+/* кнопка у выделения, появляется через 0.4 с */
+const mkOf=n=>{const e=n.nodeType===1?n:n.parentElement;return e&&e.closest('mark.m')};
+document.addEventListener('selectionchange',()=>{
+  clearTimeout(ft);fab.hidden=true;
+  const s=getSelection();if(!s.rangeCount||!s.anchorNode||!doc.contains(s.anchorNode)||!$('#pop').hidden)return;
+  const r=s.getRangeAt(0),a=mkOf(r.startContainer),b=mkOf(r.endContainer),mk=a&&a===b?a:null;
+  if(r.collapsed&&!mk)return;
+  ft=setTimeout(()=>{saved={r:r.cloneRange(),mk};showFab(r,mk)},400);
+});
+function showFab(r,mk){
+  fab.textContent=mk?'Править':'Проверить отрезок';fab.hidden=false;
+  const bb=(r.collapsed&&mk?mk:r).getBoundingClientRect(),vv=window.visualViewport;
+  let top=bb.bottom+36;if(top+50>(vv?vv.height:innerHeight))top=Math.max(8,bb.top-96);
+  fab.style.top=top+'px';
+  fab.style.left=Math.min(Math.max(8,bb.left),innerWidth-fab.offsetWidth-8)+'px';
+}
+fab.onclick=()=>{
+  fab.hidden=true;if(!saved)return;const{r,mk}=saved;
+  if(mk){openPop(mk);return}
+  const t=r.toString();if(!t.trim())return;
+  run(async()=>{const l=await ask(t);r.deleteContents();r.insertNode(frag(t,l));doc.normalize()});
+};
+
+/* окошко исправления */
+const G=()=>issues[cur.dataset.i];
+function openPop(mk){cur=mk;G().ov=mk.textContent;side='f';draw();$('#pop').hidden=false}
+function draw(){
+  const g=G();
+  $('#pt').textContent=CATS[g.c];$('#pnote').textContent=g.n;
+  $('#to').classList.toggle('on',side==='o');$('#tf').classList.toggle('on',side==='f');
+  $('#ed').value=side==='f'?g.fv:g.ov;
+  $('#df').style.setProperty('--c','var(--'+g.c+')');diff();
+}
+$('#to').onclick=()=>{side='o';draw()};
+$('#tf').onclick=()=>{side='f';draw()};
+$('#ed').oninput=()=>{G()[side==='f'?'fv':'ov']=$('#ed').value;clearTimeout(tm);tm=setTimeout(diff,DEBOUNCE)};
+$('#x').onclick=()=>{$('#pop').hidden=true};
+$('#pop').onclick=e=>{if(e.target.id==='pop')$('#pop').hidden=true};
+$('#ap').onclick=()=>{
+  const g=G();cur.replaceWith(document.createTextNode(side==='f'?g.fv:g.ov));
+  doc.normalize();$('#pop').hidden=true;upd();
+};
+const tok=s=>s.length<=60?[...s]:s.split(/(\s+)/).filter(Boolean);
+function diff(){
+  const g=G(),a=tok(g.ov),b=tok(g.fv),m=a.length,n=b.length;
+  const L=Array.from({length:m+1},()=>new Uint16Array(n+1));
+  for(let i=m-1;i>=0;i--)for(let j=n-1;j>=0;j--)L[i][j]=a[i]===b[j]?L[i+1][j+1]+1:Math.max(L[i+1][j],L[i][j+1]);
+  let i=0,j=0,ha='',hb='';const w=x=>'<b>'+esc(x)+'</b>';
+  while(i<m&&j<n){
+    if(a[i]===b[j]){ha+=esc(a[i]);hb+=esc(b[j]);i++;j++}
+    else if(L[i+1][j]>=L[i][j+1])ha+=w(a[i++]);else hb+=w(b[j++]);
+  }
+  while(i<m)ha+=w(a[i++]);while(j<n)hb+=w(b[j++]);
+  $('#df').innerHTML=side==='f'?hb:ha;
+}
+upd();
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script></body></html>
