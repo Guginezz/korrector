@@ -64,7 +64,7 @@ const DEBOUNCE=800;
 const PROMPT=`Ты корректор русского текста. Верни ТОЛЬКО JSON: {"issues":[{"original":"...","fixed":"...","category":"typo|spell|punct|gram|style","note":"..."}]}.
 Категории: typo — опечатка, промах по соседней клавише или автозамена Т9 (круэок вместо кружок); spell — орфография; punct — пунктуация; gram — грамматика, падежи, согласование; style — неудачная конструкция, порядок слов, тяжёлая фраза.
 Проверяй каждое слово в контексте фразы, а не по словарю: если слово существует, но по смыслу не подходит и похоже на опечатку или автозамену, это typo; слова, которых нет в языке, тоже ошибки. Пример: «Очин коряви текст» → original «Очин коряви», fixed «Очень корявый», category typo. Не пропускай такие случаи, даже если слово есть в словаре.
-Правила: original — дословный короткий фрагмент из текста (слово или несколько слов; для пунктуации слово рядом со знаком). fixed — тот же фрагмент исправленным. Идти строго в порядке появления в тексте. Не трогай мат, сленг, авторский стиль и намеренные приёмы. Не переписывай текст целиком. Для style fixed — осторожное предложение, а note мягкий, без слов «плохо» и «неправильно» (например «здесь можно споткнуться при чтении»). note до 12 слов. Если проблем нет, верни {"issues":[]}.`;
+Правила: original — дословный короткий фрагмент из текста (слово или несколько слов; для пунктуации слово рядом со знаком). fixed — тот же фрагмент исправленным. Идти строго в порядке появления в тексте. Не трогай мат, сленг, авторский стиль и намеренные приёмы. Не переписывай текст целиком. Для style fixed — осторожное предложение, а note мягкий, без слов «плохо» и «неправильно» (например «здесь можно споткнуться при чтении»). note до 12 слов. Внутри значений экранируй кавычки и не используй переносы строк. Если проблем нет, верни {"issues":[]}.`;
 const $=s=>document.querySelector(s);
 const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const doc=$('#doc'),fab=$('#fab');
@@ -82,15 +82,27 @@ function upd(){
 }
 doc.oninput=upd;
 
+function call(t,json,key,M){
+  return fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',
+    headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},
+    body:JSON.stringify({model:M,temperature:0,max_completion_tokens:4096,...(M.startsWith('openai/gpt-oss')?{reasoning_effort:'medium'}:{}),...(json?{response_format:{type:'json_object'}}:{}),
+      messages:[{role:'system',content:PROMPT},{role:'user',content:t}]})});
+}
 async function ask(t){
   const key=$('#key').value.trim(),M=$('#mdl').value.trim()||'openai/gpt-oss-120b';
   if(!key){$('#set').open=true;throw new Error('Сначала вставь ключ Groq')}
-  const r=await fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',
-    headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},
-    body:JSON.stringify({model:M,temperature:0,...(M.startsWith('openai/gpt-oss')?{reasoning_effort:'medium'}:{}),response_format:{type:'json_object'},
-      messages:[{role:'system',content:PROMPT},{role:'user',content:t}]})});
+  let r=await call(t,true,key,M);
+  if(r.status===400)r=await call(t,false,key,M);
   if(!r.ok){let m='';try{m=(await r.json()).error.message}catch(e){}throw new Error('Ошибка '+r.status+(r.status==401?': проверь ключ':r.status==429?': лимит, подожди минуту':'')+(m?' — '+m.slice(0,140):''))}
-  return JSON.parse((await r.json()).choices[0].message.content).issues||[];
+  const raw=(await r.json()).choices[0].message.content,m=raw.match(/\{[\s\S]*\}/);
+  try{return JSON.parse(m?m[0]:raw).issues||[]}catch(e){throw new Error('Модель ответила не в том формате')}
+}
+function chunks(t){
+  const p=t.match(/[^\n.!?…]*[\n.!?…]+\s*|[^\n.!?…]+$/g)||[t];
+  if(p.join('')!==t)return [t];
+  const o=[];let c='';
+  for(const x of p){if(c&&c.length+x.length>1200){o.push(c);c=''}c+=x}
+  if(c)o.push(c);return o;
 }
 function frag(t,list){
   const f=document.createDocumentFragment();let p=0;
@@ -108,10 +120,19 @@ function frag(t,list){
 }
 async function run(job){
   busy=true;upd();msg('Проверяю…');
-  try{await job();msg('')}catch(e){msg(e.message||'Не удалось проверить')}
+  try{msg(await job()||'')}catch(e){msg(e.message||'Не удалось проверить')}
   busy=false;upd();
 }
-$('#go').onclick=()=>run(async()=>{const t=text();const l=await ask(t);doc.replaceChildren(frag(t,l))});
+$('#go').onclick=()=>run(async()=>{
+  const cs=chunks(text()),f=document.createDocumentFragment();let bad=0;
+  for(let i=0;i<cs.length;i++){
+    msg('Проверяю '+(i+1)+' из '+cs.length+'…');
+    try{f.append(frag(cs[i],await ask(cs[i])))}
+    catch(e){if(/Ошибка 40[1]|Ошибка 429|ключ Groq/.test(e.message))throw e;bad++;f.append(cs[i])}
+  }
+  doc.replaceChildren(f);
+  return bad?'Не удалось проверить кусков: '+bad+'. Нажми «Проверить» ещё раз.':'';
+});
 $('#all').onclick=()=>{
   doc.querySelectorAll('mark.m').forEach(m=>{const g=issues[m.dataset.i];if(g&&g.c!=='style')m.replaceWith(document.createTextNode(g.fv))});
   doc.normalize();upd();
@@ -148,6 +169,35 @@ function draw(){
   const g=G();
   $('#pt').textContent=CATS[g.c];$('#pnote').textContent=g.n;
   $('#to').classList.toggle('on',side==='o');$('#tf').classList.toggle('on',side==='f');
+  $('#ed').value=side==='f'?g.fv:g.ov;
+  $('#df').style.setProperty('--c','var(--'+g.c+')');diff();
+}
+$('#to').onclick=()=>{side='o';draw()};
+$('#tf').onclick=()=>{side='f';draw()};
+$('#ed').oninput=()=>{G()[side==='f'?'fv':'ov']=$('#ed').value;clearTimeout(tm);tm=setTimeout(diff,DEBOUNCE)};
+$('#x').onclick=()=>{$('#pop').hidden=true};
+$('#pop').onclick=e=>{if(e.target.id==='pop')$('#pop').hidden=true};
+$('#ap').onclick=()=>{
+  const g=G();cur.replaceWith(document.createTextNode(side==='f'?g.fv:g.ov));
+  doc.normalize();$('#pop').hidden=true;upd();
+};
+const tok=s=>s.length<=60?[...s]:s.split(/(\s+)/).filter(Boolean);
+function diff(){
+  const g=G(),a=tok(g.ov),b=tok(g.fv),m=a.length,n=b.length;
+  const L=Array.from({length:m+1},()=>new Uint16Array(n+1));
+  for(let i=m-1;i>=0;i--)for(let j=n-1;j>=0;j--)L[i][j]=a[i]===b[j]?L[i+1][j+1]+1:Math.max(L[i+1][j],L[i][j+1]);
+  let i=0,j=0,ha='',hb='';const w=x=>'<b>'+esc(x)+'</b>';
+  while(i<m&&j<n){
+    if(a[i]===b[j]){ha+=esc(a[i]);hb+=esc(b[j]);i++;j++}
+    else if(L[i+1][j]>=L[i][j+1])ha+=w(a[i++]);else hb+=w(b[j++]);
+  }
+  while(i<m)ha+=w(a[i++]);while(j<n)hb+=w(b[j++]);
+  $('#df').innerHTML=side==='f'?hb:ha;
+}
+upd();
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script></body></html>
+ide==='f');
   $('#ed').value=side==='f'?g.fv:g.ov;
   $('#df').style.setProperty('--c','var(--'+g.c+')');diff();
 }
