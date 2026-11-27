@@ -35,6 +35,7 @@ details{font:14px system-ui,sans-serif;color:var(--mu);margin-bottom:10px}
 #df{margin:8px 0;font-size:16px}
 #df b{background:color-mix(in srgb,var(--c) 30%,transparent);border-radius:2px;font-weight:inherit}
 #pnote{color:var(--mu);font:14px system-ui,sans-serif;margin:4px 0}
+#doc{outline:none;overflow-wrap:anywhere;margin-bottom:6px;min-height:46vh}#doc.e:before{content:attr(data-ph);color:var(--mu)}#fab{position:fixed;z-index:5;box-shadow:0 4px 14px #0005}#fab[hidden]{display:none}
 </style></head><body><main>
 <h1>Корректор</h1>
 <details id="set"><summary>Ключ Groq</summary>
@@ -42,21 +43,11 @@ details{font:14px system-ui,sans-serif;color:var(--mu);margin-bottom:10px}
 <input id="mdl" placeholder="Модель (пусто = openai/gpt-oss-120b)" autocomplete="off" style="margin-top:8px"></details>
 <div class="leg"><span>🔴 опечатка</span><span>🟠 орфография</span><span>🔵 пунктуация</span><span>🟣 грамматика</span><span>⚪ стиль</span></div>
 
-<section id="edit">
-<div class="row"><textarea id="inp" placeholder="Вставь или напиши текст"></textarea></div>
-<div class="row"><button id="go" disabled>Проверить</button><span id="msg"></span></div>
-</section>
-
-<section id="review" hidden>
-<div class="row"><b id="cnt"></b></div>
-<div id="doc"></div>
-<div class="row">
-<button id="all">Применить все исправления ошибок</button>
-<button class="g" id="cp">Копировать</button>
-<button class="g" id="back">Править текст</button>
-</div>
-</section>
+<div id="doc" class="e" data-ph="Вставь или напиши текст" spellcheck="false"></div>
+<div class="row"><button id="go" disabled>Проверить</button><button class="g" id="all" disabled>Применить все исправления</button><button class="g" id="cp">Копировать</button></div>
+<div class="row"><b id="cnt"></b><span id="msg"></span></div>
 </main>
+<button id="fab" hidden></button>
 
 <div id="pop" hidden><div class="sheet">
 <div class="row" style="justify-content:space-between;margin:0"><b id="pt"></b><button class="g" id="x">Закрыть</button></div>
@@ -76,76 +67,105 @@ const PROMPT=`Ты корректор русского текста. Верни 
 Правила: original — дословный короткий фрагмент из текста (слово или несколько слов; для пунктуации слово рядом со знаком). fixed — тот же фрагмент исправленным. Идти строго в порядке появления в тексте. Не трогай мат, сленг, авторский стиль и намеренные приёмы. Не переписывай текст целиком. Для style fixed — осторожное предложение, а note мягкий, без слов «плохо» и «неправильно» (например «здесь можно споткнуться при чтении»). note до 12 слов. Если проблем нет, верни {"issues":[]}.`;
 const $=s=>document.querySelector(s);
 const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-let segs=[],cur=0,side='f',tm,busy=false;
-try{$('#key').value=localStorage.getItem('gk')||''}catch(e){}
-try{$('#mdl').value=localStorage.getItem('gm')||''}catch(e){}
-$('#mdl').oninput=()=>{try{localStorage.setItem('gm',$('#mdl').value.trim())}catch(e){}};
+const doc=$('#doc'),fab=$('#fab');
+doc.contentEditable='plaintext-only';if(doc.contentEditable!=='plaintext-only')doc.contentEditable='true';
+let issues={},nid=0,cur=null,side='f',tm,ft,busy=false,saved=null;
+try{$('#key').value=localStorage.getItem('gk')||'';$('#mdl').value=localStorage.getItem('gm')||''}catch(e){}
 $('#key').oninput=()=>{try{localStorage.setItem('gk',$('#key').value.trim())}catch(e){}};
-const upd=()=>{$('#go').disabled=busy||!$('#inp').value.trim()};
-$('#inp').oninput=upd;
+$('#mdl').oninput=()=>{try{localStorage.setItem('gm',$('#mdl').value.trim())}catch(e){}};
+const text=()=>doc.textContent,msg=t=>{$('#msg').textContent=t};
+function upd(){
+  const e=!text().trim();doc.classList.toggle('e',e);$('#go').disabled=busy||e;
+  const m=[...doc.querySelectorAll('mark.m')];
+  $('#cnt').textContent=m.length?'Найдено: '+m.length:'';
+  $('#all').disabled=!m.some(x=>issues[x.dataset.i]&&issues[x.dataset.i].c!=='style');
+}
+doc.oninput=upd;
 
-$('#go').onclick=async()=>{
-  const text=$('#inp').value,key=$('#key').value.trim(),M=$('#mdl').value.trim()||'openai/gpt-oss-120b';
-  if(!text.trim())return;
-  if(!key){$('#set').open=true;$('#msg').textContent='Сначала вставь ключ Groq';return}
-  busy=true;upd();$('#msg').textContent='Проверяю…';
-  try{
-    const r=await fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',
-      headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},
-      body:JSON.stringify({model:M,temperature:0,...(M.startsWith('openai/gpt-oss')?{reasoning_effort:'medium'}:{}),response_format:{type:'json_object'},
-        messages:[{role:'system',content:PROMPT},{role:'user',content:text}]})});
-    if(!r.ok){let m='';try{m=(await r.json()).error.message}catch(e){}throw new Error('Ошибка '+r.status+(r.status==401?': проверь ключ':r.status==429?': лимит, подожди минуту':'')+(m?' — '+m.slice(0,140):''))}
-    const j=JSON.parse((await r.json()).choices[0].message.content);
-    build(text,j.issues||[]);$('#msg').textContent='';
-  }catch(e){$('#msg').textContent=e.message||'Не удалось проверить'}
-  busy=false;upd();
-};
-
-function build(text,list){
-  segs=[];let p=0;
+async function ask(t){
+  const key=$('#key').value.trim(),M=$('#mdl').value.trim()||'openai/gpt-oss-120b';
+  if(!key){$('#set').open=true;throw new Error('Сначала вставь ключ Groq')}
+  const r=await fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',
+    headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},
+    body:JSON.stringify({model:M,temperature:0,...(M.startsWith('openai/gpt-oss')?{reasoning_effort:'medium'}:{}),response_format:{type:'json_object'},
+      messages:[{role:'system',content:PROMPT},{role:'user',content:t}]})});
+  if(!r.ok){let m='';try{m=(await r.json()).error.message}catch(e){}throw new Error('Ошибка '+r.status+(r.status==401?': проверь ключ':r.status==429?': лимит, подожди минуту':'')+(m?' — '+m.slice(0,140):''))}
+  return JSON.parse((await r.json()).choices[0].message.content).issues||[];
+}
+function frag(t,list){
+  const f=document.createDocumentFragment();let p=0;
   for(const it of list){
     if(!it.original||it.original===it.fixed)continue;
-    const i=text.indexOf(it.original,p);if(i<0)continue;
-    if(i>p)segs.push({s:text.slice(p,i)});
-    segs.push({o:it.original,ov:it.original,fv:it.fixed,c:CATS[it.category]?it.category:'spell',n:it.note||''});
+    const i=t.indexOf(it.original,p);if(i<0)continue;
+    if(i>p)f.append(t.slice(p,i));
+    const id=nid++,c=CATS[it.category]?it.category:'spell';
+    issues[id]={fv:it.fixed,c,n:it.note||'',ov:it.original};
+    const m=document.createElement('mark');m.className='m';m.dataset.i=id;
+    m.style.setProperty('--c','var(--'+c+')');m.textContent=it.original;f.append(m);
     p=i+it.original.length;
   }
-  segs.push({s:text.slice(p)});
-  $('#edit').hidden=true;$('#review').hidden=false;render();
+  f.append(t.slice(p));return f;
 }
-function render(){
-  $('#doc').innerHTML=segs.map((g,i)=>g.c?`<mark class="m" data-i="${i}" style="--c:var(--${g.c})">${esc(g.o)}</mark>`:esc(g.s)).join('');
-  const n=segs.filter(g=>g.c).length;
-  $('#cnt').textContent=n?`Найдено: ${n}`:'Всё чисто';
-  $('#all').disabled=!segs.some(g=>g.c&&g.c!=='style');
+async function run(job){
+  busy=true;upd();msg('Проверяю…');
+  try{await job();msg('')}catch(e){msg(e.message||'Не удалось проверить')}
+  busy=false;upd();
 }
-const full=()=>segs.map(g=>g.c?g.o:g.s).join('');
-$('#doc').onclick=e=>{const m=e.target.closest('mark');if(m){cur=+m.dataset.i;side='f';pop()}};
-$('#all').onclick=()=>{segs=segs.map(g=>g.c&&g.c!=='style'?{s:g.fv}:g);render()};
-$('#cp').onclick=()=>navigator.clipboard.writeText(full());
-$('#back').onclick=()=>{$('#inp').value=full();$('#review').hidden=true;$('#edit').hidden=false;upd()};
+$('#go').onclick=()=>run(async()=>{const t=text();const l=await ask(t);doc.replaceChildren(frag(t,l))});
+$('#all').onclick=()=>{
+  doc.querySelectorAll('mark.m').forEach(m=>{const g=issues[m.dataset.i];if(g&&g.c!=='style')m.replaceWith(document.createTextNode(g.fv))});
+  doc.normalize();upd();
+};
+$('#cp').onclick=()=>navigator.clipboard.writeText(text());
 
-function pop(){
-  const g=segs[cur];
+/* кнопка у выделения, появляется через 0.4 с */
+const mkOf=n=>{const e=n.nodeType===1?n:n.parentElement;return e&&e.closest('mark.m')};
+document.addEventListener('selectionchange',()=>{
+  clearTimeout(ft);fab.hidden=true;
+  const s=getSelection();if(!s.rangeCount||!s.anchorNode||!doc.contains(s.anchorNode)||!$('#pop').hidden)return;
+  const r=s.getRangeAt(0),a=mkOf(r.startContainer),b=mkOf(r.endContainer),mk=a&&a===b?a:null;
+  if(r.collapsed&&!mk)return;
+  ft=setTimeout(()=>{saved={r:r.cloneRange(),mk};showFab(r,mk)},400);
+});
+function showFab(r,mk){
+  fab.textContent=mk?'Править':'Проверить отрезок';fab.hidden=false;
+  const bb=(r.collapsed&&mk?mk:r).getBoundingClientRect(),vv=window.visualViewport;
+  let top=bb.bottom+36;if(top+50>(vv?vv.height:innerHeight))top=Math.max(8,bb.top-96);
+  fab.style.top=top+'px';
+  fab.style.left=Math.min(Math.max(8,bb.left),innerWidth-fab.offsetWidth-8)+'px';
+}
+fab.onclick=()=>{
+  fab.hidden=true;if(!saved)return;const{r,mk}=saved;
+  if(mk){openPop(mk);return}
+  const t=r.toString();if(!t.trim())return;
+  run(async()=>{const l=await ask(t);r.deleteContents();r.insertNode(frag(t,l));doc.normalize()});
+};
+
+/* окошко исправления */
+const G=()=>issues[cur.dataset.i];
+function openPop(mk){cur=mk;G().ov=mk.textContent;side='f';draw();$('#pop').hidden=false}
+function draw(){
+  const g=G();
   $('#pt').textContent=CATS[g.c];$('#pnote').textContent=g.n;
   $('#to').classList.toggle('on',side==='o');$('#tf').classList.toggle('on',side==='f');
   $('#ed').value=side==='f'?g.fv:g.ov;
-  $('#df').style.setProperty('--c',`var(--${g.c})`);
-  diff();$('#pop').hidden=false;
+  $('#df').style.setProperty('--c','var(--'+g.c+')');diff();
 }
-$('#to').onclick=()=>{side='o';pop()};
-$('#tf').onclick=()=>{side='f';pop()};
-$('#ed').oninput=()=>{segs[cur][side==='f'?'fv':'ov']=$('#ed').value;clearTimeout(tm);tm=setTimeout(diff,DEBOUNCE)};
+$('#to').onclick=()=>{side='o';draw()};
+$('#tf').onclick=()=>{side='f';draw()};
+$('#ed').oninput=()=>{G()[side==='f'?'fv':'ov']=$('#ed').value;clearTimeout(tm);tm=setTimeout(diff,DEBOUNCE)};
 $('#x').onclick=()=>{$('#pop').hidden=true};
 $('#pop').onclick=e=>{if(e.target.id==='pop')$('#pop').hidden=true};
-$('#ap').onclick=()=>{const g=segs[cur];segs[cur]={s:side==='f'?g.fv:g.ov};$('#pop').hidden=true;render()};
-
+$('#ap').onclick=()=>{
+  const g=G();cur.replaceWith(document.createTextNode(side==='f'?g.fv:g.ov));
+  doc.normalize();$('#pop').hidden=true;upd();
+};
 const tok=s=>s.length<=60?[...s]:s.split(/(\s+)/).filter(Boolean);
 function diff(){
-  const g=segs[cur],a=tok(g.ov),b=tok(g.fv),m=a.length,n=b.length;
+  const g=G(),a=tok(g.ov),b=tok(g.fv),m=a.length,n=b.length;
   const L=Array.from({length:m+1},()=>new Uint16Array(n+1));
   for(let i=m-1;i>=0;i--)for(let j=n-1;j>=0;j--)L[i][j]=a[i]===b[j]?L[i+1][j+1]+1:Math.max(L[i+1][j],L[i][j+1]);
-  let i=0,j=0,ha='',hb='';const w=x=>`<b>${esc(x)}</b>`;
+  let i=0,j=0,ha='',hb='';const w=x=>'<b>'+esc(x)+'</b>';
   while(i<m&&j<n){
     if(a[i]===b[j]){ha+=esc(a[i]);hb+=esc(b[j]);i++;j++}
     else if(L[i+1][j]>=L[i][j+1])ha+=w(a[i++]);else hb+=w(b[j++]);
@@ -153,5 +173,6 @@ function diff(){
   while(i<m)ha+=w(a[i++]);while(j<n)hb+=w(b[j++]);
   $('#df').innerHTML=side==='f'?hb:ha;
 }
+upd();
 if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
 </script></body></html>
