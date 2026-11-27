@@ -72,6 +72,7 @@ const CATS={typo:'🔴 Опечатка',spell:'🟠 Орфография',punct
 const DEBOUNCE=800;
 const PROMPT=`Ты корректор русского текста. Верни ТОЛЬКО JSON: {"issues":[{"original":"...","fixed":"...","category":"typo|spell|punct|gram|style","note":"..."}]}.
 Категории: typo — опечатка, промах по соседней клавише или автозамена Т9 (круэок вместо кружок); spell — орфография; punct — пунктуация; gram — грамматика, падежи, согласование; style — неудачная конструкция, порядок слов, тяжёлая фраза.
+Проверяй каждое слово в контексте фразы, а не по словарю: если слово существует, но по смыслу не подходит и похоже на опечатку или автозамену, это typo; слова, которых нет в языке, тоже ошибки. Пример: «Очин коряви текст» → original «Очин коряви», fixed «Очень корявый», category typo. Не пропускай такие случаи, даже если слово есть в словаре.
 Правила: original — дословный короткий фрагмент из текста (слово или несколько слов; для пунктуации слово рядом со знаком). fixed — тот же фрагмент исправленным. Идти строго в порядке появления в тексте. Не трогай мат, сленг, авторский стиль и намеренные приёмы. Не переписывай текст целиком. Для style fixed — осторожное предложение, а note мягкий, без слов «плохо» и «неправильно» (например «здесь можно споткнуться при чтении»). note до 12 слов. Если проблем нет, верни {"issues":[]}.`;
 const $=s=>document.querySelector(s);
 const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
@@ -91,7 +92,7 @@ $('#go').onclick=async()=>{
   try{
     const r=await fetch('https://api.groq.com/openai/v1/chat/completions',{method:'POST',
       headers:{'Content-Type':'application/json',Authorization:'Bearer '+key},
-      body:JSON.stringify({model:M,temperature:0,...(M.startsWith('openai/gpt-oss')?{reasoning_effort:'low'}:{}),response_format:{type:'json_object'},
+      body:JSON.stringify({model:M,temperature:0,...(M.startsWith('openai/gpt-oss')?{reasoning_effort:'medium'}:{}),response_format:{type:'json_object'},
         messages:[{role:'system',content:PROMPT},{role:'user',content:text}]})});
     if(!r.ok){let m='';try{m=(await r.json()).error.message}catch(e){}throw new Error('Ошибка '+r.status+(r.status==401?': проверь ключ':r.status==429?': лимит, подожди минуту':'')+(m?' — '+m.slice(0,140):''))}
     const j=JSON.parse((await r.json()).choices[0].message.content);
