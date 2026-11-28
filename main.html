@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#16171a">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Корректор</title>
+<style>
+:root{--bg:#f6f5f1;--fg:#1d1d1f;--mu:#6b6b72;--card:#fff;--bd:#dedcd4;--ac:#3b5bdb;--typo:#e03131;--spell:#f08c00;--punct:#1c7ed6;--gram:#9c36b5;--style:#868e96}
+@media(prefers-color-scheme:dark){:root{--bg:#16171a;--fg:#ececec;--mu:#9a9aa2;--card:#202226;--bd:#33363c;--ac:#748ffc}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.55 Georgia,"Times New Roman",serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+main{max-width:640px;margin:0 auto;padding:16px}
+h1{font-size:22px;margin:4px 0 12px}
+button,input,textarea,summary{font:15px system-ui,sans-serif}
+textarea,input{width:100%;background:var(--card);color:var(--fg);border:1px solid var(--bd);border-radius:10px;padding:12px}
+#inp{min-height:46vh;font:17px/1.55 Georgia,serif;resize:vertical}
+button{background:var(--ac);color:#fff;border:0;border-radius:10px;padding:12px 18px;cursor:pointer}
+button.g{background:transparent;color:var(--fg);border:1px solid var(--bd)}
+button:disabled{opacity:.35;cursor:default}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0}
+.leg{display:flex;gap:6px 12px;flex-wrap:wrap;font:13px system-ui,sans-serif;color:var(--mu)}
+#doc{white-space:pre-wrap;background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px;min-height:40vh}
+mark.m{background:color-mix(in srgb,var(--c) 22%,transparent);color:inherit;border-bottom:2px solid var(--c);border-radius:3px;cursor:pointer;padding:0 1px}
+details{font:14px system-ui,sans-serif;color:var(--mu);margin-bottom:10px}
+#msg{font:14px system-ui,sans-serif;color:var(--typo);min-height:20px}
+#pop{position:fixed;inset:0;background:#0007;display:flex;align-items:flex-end;justify-content:center}
+#pop[hidden]{display:none}
+.sheet{background:var(--bg);width:100%;max-width:640px;border-radius:16px 16px 0 0;padding:16px 16px calc(16px + env(safe-area-inset-bottom))}
+.tabs{display:flex;gap:6px;margin:10px 0}
+.tabs button{flex:1;background:transparent;color:var(--fg);border:1px solid var(--bd)}
+.tabs button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+#ed{min-height:90px;font:17px/1.5 Georgia,serif}
+#df{margin:8px 0;font-size:16px}
+#df b{background:color-mix(in srgb,var(--c) 30%,transparent);border-radius:2px;font-weight:inherit}
+#pnote{color:var(--mu);font:14px system-ui,sans-serif;margin:4px 0}
+#doc{outline:none;overflow-wrap:anywhere;margin-bottom:6px;min-height:46vh}#doc.e:before{content:attr(data-ph);color:var(--mu)}#fab{position:fixed;z-index:5;box-shadow:0 4px 14px #0005}#fab[hidden]{display:none}
+</style></head><body><main>
+<h1>Корректор</h1>
+<details id="set"><summary>Сервис ИИ и ключ</summary>
+<select id="prov" style="width:100%;padding:12px;border-radius:10px;border:1px solid var(--bd);background:var(--card);color:var(--fg)"></select>
+<input id="url" placeholder="Адрес API (OpenAI-совместимый)" autocomplete="off" style="margin-top:8px" hidden>
+<input id="key" type="password" placeholder="API-ключ" autocomplete="off" style="margin-top:8px">
+<input id="mdl" placeholder="Модель" autocomplete="off" style="margin-top:8px"></details>
+<div class="leg"><span>🔴 опечатка</span><span>🟠 орфография</span><span>🔵 пунктуация</span><span>🟣 грамматика</span><span>⚪ стиль</span></div>
+
+<div id="doc" class="e" data-ph="Вставь или напиши текст" spellcheck="false"></div>
+<div class="row"><button id="go" disabled>Проверить</button><button class="g" id="all" disabled>Применить все исправления</button><button class="g" id="cp">Копировать</button></div>
+<div class="row"><b id="cnt"></b><span id="msg"></span></div>
+</main>
+<button id="fab" hidden></button>
+
+<div id="pop" hidden><div class="sheet">
+<div class="row" style="justify-content:space-between;margin:0"><b id="pt"></b><button class="g" id="x">Закрыть</button></div>
+<div class="tabs"><button id="to">Оригинал</button><button id="tf" class="on">Исправлено</button></div>
+<textarea id="ed"></textarea>
+<div id="df"></div>
+<div id="pnote"></div>
+<div class="row" style="margin-bottom:0"><button id="ap">Применить</button></div>
+</div></div>
+
+<script src="korrektor.js"></script></body></html>
