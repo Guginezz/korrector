@@ -9,6 +9,7 @@ const $=s=>document.querySelector(s);
 const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const doc=$('#doc'),fab=$('#fab');
 doc.contentEditable='plaintext-only';if(doc.contentEditable!=='plaintext-only')doc.contentEditable='true';
+const CE=doc.contentEditable;
 let issues={},nid=0,cur=null,side='f',tm,ft,busy=false,saved=null;
 const PROV={
   gemini:{n:'Google Gemini',m:'gemini-3.5-flash'},
@@ -33,7 +34,10 @@ sel.onchange=()=>{ls('prov',sel.value);loadP()};
 $('#key').oninput=()=>ls('k:'+sel.value,$('#key').value.trim());
 $('#mdl').oninput=()=>ls('m:'+sel.value,$('#mdl').value.trim());
 $('#url').oninput=()=>ls('u:custom',$('#url').value.trim());
-const text=()=>doc.textContent,msg=t=>{$('#msg').textContent=t};
+let snap=null;const ub=document.createElement('button');ub.id='undo';ub.className='g';ub.textContent='Отменить';ub.disabled=true;$('#cp').after(ub);
+function snapshot(){snap=doc.innerHTML;ub.disabled=false}
+ub.onclick=()=>{if(snap===null)return;doc.innerHTML=snap;snap=null;ub.disabled=true;upd()};
+const text=()=>doc.contentEditable==='plaintext-only'?doc.textContent:doc.innerText,msg=t=>{$('#msg').textContent=t};
 function upd(){
   const e=!text().trim();doc.classList.toggle('e',e);$('#go').disabled=busy||e;
   const m=[...doc.querySelectorAll('mark.m')];
@@ -41,11 +45,12 @@ function upd(){
   $('#all').disabled=!m.some(x=>issues[x.dataset.i]&&issues[x.dataset.i].c!=='style');
 }
 doc.oninput=upd;
+doc.addEventListener('paste',e=>{if(doc.contentEditable==='plaintext-only')return;e.preventDefault();document.execCommand('insertText',false,(e.clipboardData||window.clipboardData).getData('text/plain'))});
 
 const SCHEMA={type:'OBJECT',properties:{issues:{type:'ARRAY',items:{type:'OBJECT',properties:{original:{type:'STRING'},fixed:{type:'STRING'},category:{type:'STRING',enum:['typo','spell','punct','gram','style']},note:{type:'STRING'}},required:['original','fixed','category','note']}}},required:['issues']};
 const SAFE=['HARASSMENT','HATE_SPEECH','SEXUALLY_EXPLICIT','DANGEROUS_CONTENT'].map(c=>({category:'HARM_CATEGORY_'+c,threshold:'BLOCK_NONE'}));
 const API='https://generativelanguage.googleapis.com/v1beta/models';
-const cache=new Map();
+const cache=new Map();let skipped=0;
 function gcall(u,key,M){
   return fetch(API+'/'+encodeURIComponent(M)+':generateContent?key='+encodeURIComponent(key),{method:'POST',
     headers:{'Content-Type':'application/json'},
@@ -86,7 +91,7 @@ async function ask(t,b,a){
   }else raw=(((j.choices||[{}])[0].message)||{}).content||'';
   if(!raw)throw new Error('Пустой ответ'+(fr?' ('+fr+')':''));
   const m=raw.match(/\{[\s\S]*\}/);
-  try{return JSON.parse(m?m[0]:raw).issues||[]}catch(x){throw new Error('Модель ответила не в том формате')}
+  try{const v=JSON.parse(m?m[0]:raw).issues;return Array.isArray(v)?v:[]}catch(x){throw new Error('Модель ответила не в том формате')}
 }
 function chunks(t){
   const p=t.match(/[^\n.!?…]*[\n.!?…]+\s*|[^\n.!?…]+$/g)||[t];
@@ -98,11 +103,11 @@ function chunks(t){
 function frag(t,list){
   const f=document.createDocumentFragment();let p=0;
   for(const it of list){
-    if(!it.original||it.original===it.fixed)continue;
-    const i=t.indexOf(it.original,p);if(i<0)continue;
+    if(typeof it.original!=='string'||typeof it.fixed!=='string'||!it.original||it.original===it.fixed)continue;
+    const i=t.indexOf(it.original,p);if(i<0){skipped++;continue}
     if(i>p)f.append(t.slice(p,i));
     const id=nid++,c=CATS[it.category]?it.category:'spell';
-    issues[id]={fv:it.fixed,c,n:it.note||'',ov:it.original};
+    issues[id]={fv:it.fixed,c,n:String(it.note||''),ov:it.original};
     const m=document.createElement('mark');m.className='m';m.dataset.i=id;
     m.style.setProperty('--c','var(--'+c+')');m.textContent=it.original;f.append(m);
     p=i+it.original.length;
@@ -110,21 +115,31 @@ function frag(t,list){
   f.append(t.slice(p));return f;
 }
 async function run(job){
-  busy=true;upd();msg('Проверяю…');
+  busy=true;snapshot();doc.contentEditable='false';upd();msg('Проверяю…');
   try{msg(await job()||'')}catch(e){msg(e.message||'Не удалось проверить')}
-  busy=false;upd();
+  doc.contentEditable=CE;busy=false;upd();
 }
 $('#go').onclick=()=>run(async()=>{
-  const cs=chunks(text()),f=document.createDocumentFragment();let bad=0;
+  const cs=chunks(text()),f=document.createDocumentFragment(),pk=sel.value+'|'+($('#mdl').value.trim()||PROV[sel.value].m)+'|';
+  let bad=0,done=0,stop='';skipped=0;
   for(let i=0;i<cs.length;i++){
+    if(stop){f.append(cs[i]);continue}
     msg('Проверяю '+(i+1)+' из '+cs.length+'…');
-    try{let l=cache.get(cs[i]);if(!l){l=await ask(cs[i],(cs[i-1]||"").slice(-200),(cs[i+1]||"").slice(0,200));cache.set(cs[i],l)}f.append(frag(cs[i],l))}
-    catch(e){if(/Ошибка 4|API-ключ|название модели|адрес API/.test(e.message))throw e;bad++;f.append(cs[i])}
+    try{
+      let l=cache.get(pk+cs[i]);
+      if(!l){l=await ask(cs[i],(cs[i-1]||"").slice(-200),(cs[i+1]||"").slice(0,200));cache.set(pk+cs[i],l)}
+      f.append(frag(cs[i],l));done++;
+    }catch(e){
+      f.append(cs[i]);
+      if(/Ошибка 4|API-ключ|название модели|адрес API/.test(e.message))stop=e.message;else bad++;
+    }
   }
+  if(stop&&!done)throw new Error(stop);
   doc.replaceChildren(f);
-  return bad?'Не удалось проверить кусков: '+bad+'. Нажми «Проверить» ещё раз.':'';
+  if(stop)throw new Error('Остановлено: '+stop+' Готовые куски сохранены.');
+  return [bad?'Не проверено кусков: '+bad+'.':'',skipped?'Пропущено правок: '+skipped+'.':''].filter(Boolean).join(' ');
 });
-$('#all').onclick=()=>{
+$('#all').onclick=()=>{snapshot();
   doc.querySelectorAll('mark.m').forEach(m=>{const g=issues[m.dataset.i];if(g&&g.c!=='style')m.replaceWith(document.createTextNode(g.fv))});
   doc.normalize();upd();
 };
@@ -155,6 +170,39 @@ fab.onclick=()=>{
 
 /* окошко исправления */
 const G=()=>issues[cur.dataset.i];
+function openPop(mk){cur=mk;G().ov=mk.textContent;side='f';draw();$('#pop').hidden=false}
+function draw(){
+  const g=G();
+  $('#pt').textContent=CATS[g.c];$('#pnote').textContent=g.n;
+  $('#to').classList.toggle('on',side==='o');$('#tf').classList.toggle('on',side==='f');
+  $('#ed').value=side==='f'?g.fv:g.ov;
+  $('#df').style.setProperty('--c','var(--'+g.c+')');diff();
+}
+$('#to').onclick=()=>{side='o';draw()};
+$('#tf').onclick=()=>{side='f';draw()};
+$('#ed').oninput=()=>{G()[side==='f'?'fv':'ov']=$('#ed').value;clearTimeout(tm);tm=setTimeout(diff,DEBOUNCE)};
+$('#x').onclick=()=>{$('#pop').hidden=true};
+$('#pop').onclick=e=>{if(e.target.id==='pop')$('#pop').hidden=true};
+$('#ap').onclick=()=>{snapshot();
+  const g=G();cur.replaceWith(document.createTextNode(side==='f'?g.fv:g.ov));
+  doc.normalize();$('#pop').hidden=true;upd();
+};
+const tok=s=>s.length<=60?[...s]:s.split(/(\s+)/).filter(Boolean);
+function diff(){
+  const g=G(),a=tok(g.ov),b=tok(g.fv),m=a.length,n=b.length;
+  const L=Array.from({length:m+1},()=>new Uint16Array(n+1));
+  for(let i=m-1;i>=0;i--)for(let j=n-1;j>=0;j--)L[i][j]=a[i]===b[j]?L[i+1][j+1]+1:Math.max(L[i+1][j],L[i][j+1]);
+  let i=0,j=0,ha='',hb='';const w=x=>'<b>'+esc(x)+'<\/b>';
+  while(i<m&&j<n){
+    if(a[i]===b[j]){ha+=esc(a[i]);hb+=esc(b[j]);i++;j++}
+    else if(L[i+1][j]>=L[i][j+1])ha+=w(a[i++]);else hb+=w(b[j++]);
+  }
+  while(i<m)ha+=w(a[i++]);while(j<n)hb+=w(b[j++]);
+  $('#df').innerHTML=side==='f'?hb:ha;
+}
+upd();
+if('serviceWorker'in navigator)navigator.serviceWorker.register('sw2.js').catch(()=>{});
+r.dataset.i];
 function openPop(mk){cur=mk;G().ov=mk.textContent;side='f';draw();$('#pop').hidden=false}
 function draw(){
   const g=G();
